@@ -1,0 +1,245 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { Box3, Euler, Matrix3, Matrix4, Vector3 } from "three";
+import { OBB } from "three/addons/math/OBB.js";
+import {
+  anchorPose,
+  chairStack,
+  chairStackStyles,
+  leavesPassagesClear,
+  maxChairPile,
+  partSolids,
+  solidsOverlap,
+} from "../src/lib/game/furniture-layout";
+import { createFurniture, furnitureVariants } from "../src/lib/game/furniture-models";
+import { CELL, HEIGHT, N, E, S, W, directions, random } from "../src/lib/game/maze";
+import { headlessMaterials } from "./helpers/materials";
+
+function orientedBox(center: Vector3, size: Vector3, pose: Matrix4) {
+  const scale = new Vector3().setFromMatrixScale(pose);
+  const rotation = new Matrix3().setFromMatrix4(
+    new Matrix4().extractRotation(pose),
+  );
+  return new OBB(
+    center.clone().applyMatrix4(pose),
+    size.clone().multiply(scale).multiplyScalar(0.5),
+    rotation,
+  );
+}
+
+function boxAt(center: Vector3, size: Vector3) {
+  return new Box3().setFromCenterAndSize(center, size);
+}
+
+function chairs() {
+  const mats = headlessMaterials();
+  const models = Array.from({ length: furnitureVariants }, (_, variant) =>
+    createFurniture("chair", mats, false, variant));
+  return { mats, models };
+}
+
+test("piled chairs rest on each other without any solids passing through", () => {
+  const { mats, models } = chairs();
+  try {
+    for (const model of models) {
+      const frame = model.chair!;
+      for (const style of chairStackStyles) {
+        for (let seed = 0; seed < 40; seed++) {
+          const poses = chairStack(frame, -13.4, 7.9, seed * 0.71, 6, random(seed), style);
+          const solids = poses.map((pose) => partSolids(model, pose));
+          for (let i = 0; i < solids.length; i++)
+            for (let j = i + 1; j < solids.length; j++)
+              assert.ok(
+                !solidsOverlap(solids[i], solids[j]),
+                `chairs ${i} and ${j} interpenetrate for ${style} seed ${seed}`,
+              );
+          for (let i = 1; i < solids.length; i++) {
+            const touching = solids[i].map((solid) => new OBB(
+              solid.center, solid.halfSize.clone().addScalar(0.003), solid.rotation,
+            ));
+            assert.ok(
+              touching.some((a) => solids[i - 1].some((b) => a.intersectsOBB(b))),
+              `chair ${i} floats above its support for ${style} seed ${seed}`,
+            );
+          }
+          const top = Math.max(...poses.map((pose) =>
+            model.bounds.clone().applyMatrix4(pose).max.y));
+          assert.ok(top < HEIGHT - 0.05, `pile clears the ceiling: ${top}`);
+        }
+      }
+    }
+  } finally {
+    models.forEach((model) => model.parts.forEach(({ geometry }) => geometry.dispose()));
+    mats.dispose();
+  }
+});
+
+test("the overlap test is not vacuous: sinking a piled chair is caught", () => {
+  const { mats, models } = chairs();
+  try {
+    const model = models[0];
+    const [base, upper] = chairStack(model.chair!, 0, 0, 0.4, 2, random(3), "aligned");
+    const sunk = upper.clone().premultiply(new Matrix4().makeTranslation(0, -0.03, 0));
+    assert.ok(!solidsOverlap(partSolids(model, base), partSolids(model, upper)));
+    assert.ok(solidsOverlap(partSolids(model, base), partSolids(model, sunk)));
+  } finally {
+    models.forEach((model) => model.parts.forEach(({ geometry }) => geometry.dispose()));
+    mats.dispose();
+  }
+});
+
+test("all four base-chair legs rest on the floor at arbitrary placement and yaw", () => {
+  const { mats, models } = chairs();
+  try {
+    for (const model of models) {
+      const { legInset } = model.chair!;
+      for (const [x, z, yaw] of [
+        [0, 0, 0],
+        [-17.3, -8.9, 0.84],
+        [22.1, -40.7, Math.PI],
+        [-0.2, 3.4, Math.PI * 1.7],
+      ]) {
+        const [base] = chairStack(model.chair!, x, z, yaw, 4, random(18));
+        for (const lx of [-legInset, legInset]) {
+          for (const lz of [-legInset, legInset]) {
+            const bottom = new Vector3(lx, 0, lz).applyMatrix4(base);
+            assert.ok(Math.abs(bottom.y) < 1e-10);
+            assert.ok(Math.hypot(bottom.x - x, bottom.z - z) < 0.28);
+          }
+        }
+        assert.ok(Math.abs(model.bounds.clone().applyMatrix4(base).min.y) < 1e-6);
+      }
+    }
+  } finally {
+    models.forEach((model) => model.parts.forEach(({ geometry }) => geometry.dispose()));
+    mats.dispose();
+  }
+});
+
+test("the same tape produces the same pile while other seeds vary it", () => {
+  const { mats, models } = chairs();
+  try {
+    const frame = models[0].chair!;
+    const poseValues = (seed: number) =>
+      chairStack(frame, 2.4, -12, 0.5, 5, random(seed)).map((pose) => pose.elements);
+    assert.deepEqual(poseValues(199307), poseValues(199307));
+    const piles = new Set<string>();
+    for (let seed = 0; seed < 12; seed++) piles.add(JSON.stringify(poseValues(seed)));
+    assert.ok(piles.size > 3, "crooked piles vary with the tape");
+    assert.ok(maxChairPile(frame) >= 5);
+  } finally {
+    models.forEach((model) => model.parts.forEach(({ geometry }) => geometry.dispose()));
+    mats.dispose();
+  }
+});
+
+test("pile styles have distinct silhouettes and reproduce from the same tape", () => {
+  const { mats, models } = chairs();
+  try {
+    const silhouettes = new Set<string>();
+    for (const style of chairStackStyles) {
+      const snapshot = () => chairStack(models[1].chair!, 0, 0, 0, 5, random(42), style)
+        .map((pose) => pose.elements);
+      assert.deepEqual(snapshot(), snapshot());
+      silhouettes.add(JSON.stringify(snapshot()));
+    }
+    assert.equal(silhouettes.size, chairStackStyles.length);
+  } finally {
+    models.forEach((model) => model.parts.forEach(({ geometry }) => geometry.dispose()));
+    mats.dispose();
+  }
+});
+
+test("rotated and scaled furniture remains attached to a solid wall", () => {
+  const wall = new OBB(
+    new Vector3(-0.09, 1.5, -6),
+    new Vector3(0.09, 1.5, 2),
+  );
+  const attachment = new Vector3(-0.06, 1.7, -6.2);
+  const furnitureSize = new Vector3(1.4, 0.8, 0.6);
+  const furnitureAnchor = new Vector3(0, -0.4, 0);
+  for (const scale of [0.65, 1, 1.8]) {
+    for (const rotation of [
+      new Euler(0.42, -0.8, 1.1),
+      new Euler(-1.2, 0.31, -0.64),
+      new Euler(Math.PI / 2, Math.PI, 0.2),
+    ]) {
+      const pose = anchorPose(furnitureAnchor, attachment, rotation, scale);
+      const placedAnchor = furnitureAnchor.clone().applyMatrix4(pose);
+      assert.ok(placedAnchor.distanceTo(attachment) < 1e-10);
+      assert.ok(
+        orientedBox(new Vector3(), furnitureSize, pose).intersectsOBB(wall),
+        "a tilted furniture solid must touch the wall, not hang beside it",
+      );
+    }
+  }
+});
+
+test("furniture cannot obstruct room centers or open doorways, including negative cells", () => {
+  for (const [cx, cz] of [
+    [-7, -3],
+    [-1, -1],
+    [0, 0],
+    [4, -8],
+  ]) {
+    const center = new Vector3((cx + 0.5) * CELL, 0.5, (cz + 0.5) * CELL);
+    const toy = new Vector3(0.45, 1, 0.45);
+    for (let bits = 0; bits < 16; bits++) {
+      assert.equal(leavesPassagesClear(boxAt(center, toy), cx, cz, bits), false);
+      for (const direction of directions) {
+        const doorway = center.clone().add(
+          new Vector3(direction.dx, 0, direction.dz).multiplyScalar(
+            CELL / 2 - 0.2,
+          ),
+        );
+        assert.equal(
+          leavesPassagesClear(boxAt(doorway, toy), cx, cz, bits),
+          !(bits & direction.bit),
+          `blocked passage ${direction.bit} in cell ${cx},${cz}, mask ${bits}`,
+        );
+      }
+    }
+  }
+});
+
+test("overhead props allow walking below, but head-height and floor props block the lane", () => {
+  const cx = -2,
+    cz = -5;
+  const x = (cx + 0.5) * CELL,
+    z = (cz + 0.5) * CELL;
+  const opening = N | E | S | W;
+  assert.equal(
+    leavesPassagesClear(
+      new Box3(
+        new Vector3(x - 0.7, 2.1, z - 0.4),
+        new Vector3(x + 0.7, 2.7, z + 0.4),
+      ),
+      cx,
+      cz,
+      opening,
+    ),
+    true,
+  );
+  for (const bottom of [0, 0.8, 1.7]) {
+    const prop = boxAt(
+      new Vector3(x, bottom + 0.1, z),
+      new Vector3(1.4, 0.2, 0.8),
+    );
+    assert.equal(leavesPassagesClear(prop, cx, cz, opening), false);
+  }
+});
+
+test("wall-clipped props can overlap the wall without reaching the adjacent room center", () => {
+  const cx = -3,
+    cz = -1;
+  const wallX = cx * CELL,
+    z = (cz + 0.5) * CELL;
+  const clipped = new Box3(
+    new Vector3(wallX - 0.35, 0, z - 0.4),
+    new Vector3(wallX + 0.8, 1.4, z + 0.4),
+  );
+  assert.equal(leavesPassagesClear(clipped, cx, cz, N | E | S), true);
+  const reachingNextRoom = clipped.clone();
+  reachingNextRoom.min.x = wallX - CELL / 2;
+  assert.equal(leavesPassagesClear(reachingNextRoom, cx, cz, N | E | S), false);
+});

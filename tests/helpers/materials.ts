@@ -1,0 +1,93 @@
+import { FurnitureLibrary } from "../../src/lib/game/furniture-library";
+import * as THREE from "three";
+import { createRoomAmbientPool } from "../../src/lib/game/room-lighting";
+import type { Materials } from "../../src/lib/game/materials";
+
+export function headlessMaterials(): Materials {
+  const ambientMaps = createRoomAmbientPool();
+  const standardNames = [
+    "hotelNumbers",
+    "wall",
+    "floor",
+    "top",
+    "tileWall",
+    "tileFloor",
+    "trim",
+    "fixtures",
+    "troffer",
+    "deadLight",
+    "wood",
+    "fabric",
+    "upholstery",
+    "enamel",
+    "fadedRed",
+    "ballPit",
+    "ballPitFill",
+    "cream",
+    "metal",
+    "paper",
+    "funWall",
+    "funCarpet",
+    "funTrim",
+    "funStripe",
+    "courtyardWall",
+    "courtyardPaving",
+    "courtyardWood",
+    "courtyardGrass",
+    "courtyardCurtain",
+    "courtyardWarm",
+    "courtyardGlass",
+    "streetWall",
+    "streetAsphalt",
+    "streetGrass",
+    "streetRoof",
+    "streetTrim",
+    "streetHedge",
+  ] as const;
+  const standard = Object.fromEntries(
+    standardNames.map((name) => [name, new THREE.MeshStandardMaterial()]),
+  ) as Record<(typeof standardNames)[number], THREE.MeshStandardMaterial>;
+  const basic = {
+    luminous: new THREE.MeshBasicMaterial(),
+    tubePanel: new THREE.MeshBasicMaterial({ vertexColors: true }),
+    lampGlow: new THREE.MeshBasicMaterial(),
+    shadow: new THREE.MeshBasicMaterial({ transparent: true }),
+    darkness: new THREE.MeshBasicMaterial(),
+  };
+  const funMurals = Array.from(
+    { length: 3 },
+    () => new THREE.MeshStandardMaterial({ alphaTest: 0.5 }),
+  );
+  const vinyl = Array.from({ length: 5 }, () => new THREE.MeshStandardMaterial());
+  const streetSiding = Array.from(
+    { length: 5 },
+    () => new THREE.MeshStandardMaterial(),
+  );
+  const discoveryNotes = Array.from({ length: 3 }, () => new THREE.MeshStandardMaterial());
+  const furniture: FurnitureLibrary = new FurnitureLibrary(() => materials);
+  const materials = {
+    furniture,
+    discoveryNotes,
+    ambientMaps,
+    ...standard,
+    ...basic,
+    funMurals,
+    vinyl,
+    streetSiding,
+    forTheme: () => ({ wall: standard.wall, floor: standard.floor }),
+    dispose: () => {
+      ambientMaps.dispose();
+      furniture.dispose();
+      for (const material of [
+        ...Object.values(standard),
+        ...Object.values(basic),
+        ...funMurals,
+        ...vinyl,
+        ...discoveryNotes,
+        ...streetSiding,
+      ])
+        material.dispose();
+    },
+  };
+  return materials;
+}

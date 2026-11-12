@@ -1,0 +1,4 @@
+Teammate bodies are Kenney Mini Characters by Kenney (www.kenney.nl).
+License: CC0 1.0 Universal. https://creativecommons.org/publicdomain/zero/1.0/
+Credit is welcome and not required.
+Personality labels are original to this fork.
